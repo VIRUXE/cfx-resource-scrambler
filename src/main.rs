@@ -11,7 +11,7 @@ use scrambler::ResourceScrambler;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
-    let mut src = PathBuf::from("./resources");
+    let mut src: Option<PathBuf> = None;
     let mut dst = PathBuf::from("./scrambled_resources");
     let mut loader = PathBuf::from("./loader.lua");
     let mut timings = false;
@@ -19,34 +19,47 @@ fn main() -> ExitCode {
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--src" => {
-                if let Some(v) = args.next() {
-                    src = PathBuf::from(v);
+            "--dst" => match args.next() {
+                Some(v) => dst = PathBuf::from(v),
+                None => {
+                    eprintln!("error: --dst requires a value");
+                    return ExitCode::from(2);
                 }
-            }
-            "--dst" => {
-                if let Some(v) = args.next() {
-                    dst = PathBuf::from(v);
+            },
+            "--loader" => match args.next() {
+                Some(v) => loader = PathBuf::from(v),
+                None => {
+                    eprintln!("error: --loader requires a value");
+                    return ExitCode::from(2);
                 }
-            }
-            "--loader" => {
-                if let Some(v) = args.next() {
-                    loader = PathBuf::from(v);
-                }
-            }
+            },
             "--timings" => timings = true,
             "--quiet" | "-q" => quiet = true,
             "-h" | "--help" => {
                 print_usage();
                 return ExitCode::SUCCESS;
             }
-            other => {
+            other if other.starts_with('-') => {
                 eprintln!("unknown argument: {other}");
                 print_usage();
                 return ExitCode::from(2);
             }
+            other => {
+                if src.is_some() {
+                    eprintln!("error: extra positional argument: {other}");
+                    print_usage();
+                    return ExitCode::from(2);
+                }
+                src = Some(PathBuf::from(other));
+            }
         }
     }
+
+    let Some(src) = src else {
+        eprintln!("error: missing <resources-dir>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
 
     if let Err(e) = run(&src, &dst, &loader, timings, quiet) {
         eprintln!("error: {e}");
@@ -57,16 +70,16 @@ fn main() -> ExitCode {
 
 fn print_usage() {
     eprintln!(
-        "cfx-resource-scrambler — scramble FiveM resource event names\n\n\
+        "resource-scrambler — scramble FiveM resource event names\n\n\
          USAGE:\n  \
-           cfx-resource-scrambler [--src <dir>] [--dst <dir>] [--loader <path>] [--timings] [--quiet]\n\n\
-         DEFAULTS:\n  \
-           --src    ./resources\n  \
-           --dst    ./scrambled_resources\n  \
-           --loader ./loader.lua\n\n\
-         FLAGS:\n  \
-           --timings  print per-step durations to stderr\n  \
-           --quiet    suppress per-script progress output"
+           resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet]\n\n\
+         ARGUMENTS:\n  \
+           <resources-dir>  directory containing the resources to scramble (required)\n\n\
+         OPTIONS:\n  \
+           --dst <dir>     output directory                        (default ./scrambled_resources)\n  \
+           --loader <path> Lua manifest sandbox                    (default ./loader.lua)\n  \
+           --timings       print per-step durations to stderr\n  \
+           --quiet, -q     suppress per-script progress output"
     );
 }
 

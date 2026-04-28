@@ -76,26 +76,23 @@ cargo build --release --target x86_64-pc-windows-gnu
 ## Usage
 
 1. **Back up your resources first.**
-2. Place all the resources you want to scramble in `./resources/`.
-3. Run the binary:
+2. Run the binary, passing the path to your resources directory:
 
    ```sh
-   ./resource-scrambler
+   ./resource-scrambler /path/to/your/resources
    ```
 
-4. Move the contents of `./scrambled_resources/` back into your server's
+3. Move the contents of `./scrambled_resources/` back into your server's
    resource directory and add `start scrambler-vac` to your `server.cfg`.
 
-Flags:
-
 ```
-resource-scrambler [--src <dir>] [--dst <dir>] [--loader <path>] [--timings] [--quiet]
+resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet]
 
-  --src     source resources directory          (default ./resources)
-  --dst     output directory                    (default ./scrambled_resources)
-  --loader  Lua manifest sandbox                (default ./loader.lua)
-  --timings print per-step durations to stderr
-  --quiet   suppress per-script progress lines
+  <resources-dir>  directory containing the resources to scramble (required)
+  --dst <dir>      output directory                        (default ./scrambled_resources)
+  --loader <path>  Lua manifest sandbox                    (default ./loader.lua)
+  --timings        print per-step durations to stderr
+  --quiet, -q      suppress per-script progress output
 ```
 
 ## Output

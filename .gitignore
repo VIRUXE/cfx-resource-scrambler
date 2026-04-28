@@ -1,0 +1,6 @@
+/target
+/scrambled_resources
+/resources/*
+!/resources/.gitkeep
+/.claude
+/dist

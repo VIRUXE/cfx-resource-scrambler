@@ -13,7 +13,7 @@ fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let mut src: Option<PathBuf> = None;
     let mut dst = PathBuf::from("./scrambled_resources");
-    let mut loader = PathBuf::from("./loader.lua");
+    let mut loader: Option<PathBuf> = None;
     let mut timings = false;
     let mut quiet = false;
 
@@ -27,7 +27,7 @@ fn main() -> ExitCode {
                 }
             },
             "--loader" => match args.next() {
-                Some(v) => loader = PathBuf::from(v),
+                Some(v) => loader = Some(PathBuf::from(v)),
                 None => {
                     eprintln!("error: --loader requires a value");
                     return ExitCode::from(2);
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    if let Err(e) = run(&src, &dst, &loader, timings, quiet) {
+    if let Err(e) = run(&src, &dst, loader.as_deref(), timings, quiet) {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
     }
@@ -77,21 +77,18 @@ fn print_usage() {
            <resources-dir>  directory containing the resources to scramble (required)\n\n\
          OPTIONS:\n  \
            --dst <dir>     output directory                        (default ./scrambled_resources)\n  \
-           --loader <path> Lua manifest sandbox                    (default ./loader.lua)\n  \
+           --loader <path> override the embedded Lua manifest sandbox\n  \
            --timings       print per-step durations to stderr\n  \
            --quiet, -q     suppress per-script progress output"
     );
 }
 
-fn run(src: &Path, dst: &Path, loader: &Path, timings: bool, quiet: bool) -> Result<(), String> {
+fn run(src: &Path, dst: &Path, loader: Option<&Path>, timings: bool, quiet: bool) -> Result<(), String> {
     if !src.exists() {
         return Err(format!(
             "source directory {} does not exist",
             src.display()
         ));
-    }
-    if !loader.exists() {
-        return Err(format!("loader at {} not found", loader.display()));
     }
 
     let mut step = StepTimer::new(timings);
@@ -109,7 +106,14 @@ fn run(src: &Path, dst: &Path, loader: &Path, timings: bool, quiet: bool) -> Res
         .map_err(|e| format!("failed to clone {} → {}: {e}", src.display(), dst.display()))?;
     step.end();
 
-    let mut scrambler = ResourceScrambler::new(loader);
+    let mut scrambler = match loader {
+        Some(path) => {
+            let source = fs::read_to_string(path)
+                .map_err(|e| format!("failed to read loader at {}: {e}", path.display()))?;
+            ResourceScrambler::with_loader_source(source)
+        }
+        None => ResourceScrambler::new(),
+    };
 
     if !quiet {
         println!("Loading scripts");

@@ -89,9 +89,16 @@ struct EventsTable {
     client: Vec<EventPair>,
 }
 
+/// Embedded Lua manifest sandbox. Defines the globals that FiveM's
+/// `__resource.lua` files use (`server_script`, `client_script`, dummies
+/// for `description` / `version` / etc.) so manifests can be evaluated by an
+/// in-process Lua VM. Users who need a customised sandbox can supply their
+/// own via `ResourceScrambler::with_loader_source` / `--loader`.
+pub const DEFAULT_LOADER_LUA: &str = include_str!("../loader.lua");
+
 pub struct ResourceScrambler {
     re: EventRegexes,
-    loader_lua_path: PathBuf,
+    loader_source: String,
 
     system_server_events: Vec<String>,
     system_net_events: Vec<String>,
@@ -124,13 +131,19 @@ pub struct ResourceScrambler {
 }
 
 impl ResourceScrambler {
-    pub fn new(loader_lua_path: impl Into<PathBuf>) -> Self {
+    /// Build a scrambler that uses the embedded Lua manifest sandbox.
+    pub fn new() -> Self {
+        Self::with_loader_source(DEFAULT_LOADER_LUA.to_owned())
+    }
+
+    /// Build a scrambler that uses a caller-supplied Lua manifest sandbox.
+    pub fn with_loader_source(loader_source: String) -> Self {
         let initial = "scrambler:injectionDetected".to_string();
         let mut seen_system_server = HashSet::new();
         seen_system_server.insert(initial.clone());
         Self {
             re: EventRegexes::new(),
-            loader_lua_path: loader_lua_path.into(),
+            loader_source,
             system_server_events: vec![initial],
             system_net_events: Vec::new(),
             system_client_events: Vec::new(),
@@ -184,13 +197,9 @@ impl ResourceScrambler {
             }
         }
 
-        // Second pass: actually parse the manifests.
-        let loader_code = fs::read_to_string(&self.loader_lua_path).map_err(|e| {
-            format!(
-                "failed to read loader at {}: {e}",
-                self.loader_lua_path.display()
-            )
-        })?;
+        // Second pass: actually parse the manifests. Take an owned copy of
+        // the loader source so the loop body is free to take `&mut self`.
+        let loader_code = self.loader_source.clone();
 
         for resource_file in &resource_files {
             let resource_code = match fs::read_to_string(resource_file) {

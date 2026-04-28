@@ -90,10 +90,15 @@ resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [
 
   <resources-dir>  directory containing the resources to scramble (required)
   --dst <dir>      output directory                        (default ./scrambled_resources)
-  --loader <path>  Lua manifest sandbox                    (default ./loader.lua)
+  --loader <path>  override the embedded Lua manifest sandbox
   --timings        print per-step durations to stderr
   --quiet, -q      suppress per-script progress output
 ```
+
+The `__resource.lua` manifest sandbox (`loader.lua` at the repo root) is
+compiled into the binary, so a normal install needs nothing besides the
+executable. The `--loader` flag is for advanced users who want a customised
+sandbox — e.g. recognising additional manifest directives.
 
 ## Output
 

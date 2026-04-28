@@ -50,8 +50,8 @@ A typical FXserver deployment lands well below the largest row.
 
 Download the latest archive from the [releases](../../releases) page:
 
-* `cfx-resource-scrambler-linux-x86_64` — static-ish Linux binary
-* `cfx-resource-scrambler-windows-x86_64.exe` — Windows binary (no Lua DLL needed)
+* `resource-scrambler-linux-x86_64` — static-ish Linux binary
+* `resource-scrambler-windows-x86_64.exe` — Windows binary (no Lua DLL needed)
 
 Both bundle Lua via `mlua`'s `vendored` feature, so there is nothing else to
 install.
@@ -80,7 +80,7 @@ cargo build --release --target x86_64-pc-windows-gnu
 3. Run the binary:
 
    ```sh
-   ./cfx-resource-scrambler
+   ./resource-scrambler
    ```
 
 4. Move the contents of `./scrambled_resources/` back into your server's
@@ -89,7 +89,7 @@ cargo build --release --target x86_64-pc-windows-gnu
 Flags:
 
 ```
-cfx-resource-scrambler [--src <dir>] [--dst <dir>] [--loader <path>] [--timings] [--quiet]
+resource-scrambler [--src <dir>] [--dst <dir>] [--loader <path>] [--timings] [--quiet]
 
   --src     source resources directory          (default ./resources)
   --dst     output directory                    (default ./scrambled_resources)

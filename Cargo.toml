@@ -1,13 +1,13 @@
 [package]
 name = "cfx-resource-scrambler"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 description = "Rust port of fxserver-resource-scrambler: replaces FiveM resource events with random UUIDs"
 license = "GPL-3.0"
 authors = ["Jérémie N'gadi (original)", "Rust port"]
 
 [[bin]]
-name = "cfx-resource-scrambler"
+name = "resource-scrambler"
 path = "src/main.rs"
 
 [dependencies]

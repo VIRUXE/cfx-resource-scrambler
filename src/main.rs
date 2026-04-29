@@ -74,14 +74,15 @@ fn print_usage() {
     eprintln!(
         "resource-scrambler — scramble FiveM resource event names\n\n\
          USAGE:\n  \
-           resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet]\n\n\
+           resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet] [--no-clone]\n\n\
          ARGUMENTS:\n  \
            <resources-dir>  directory containing the resources to scramble (required)\n\n\
          OPTIONS:\n  \
            --dst <dir>     output directory                        (default ./scrambled_resources)\n  \
            --loader <path> override the embedded Lua manifest sandbox\n  \
            --timings       print per-step durations to stderr\n  \
-           --quiet, -q     suppress per-script progress output"
+           --quiet, -q     suppress per-script progress output\n  \
+           --no-clone      skip the clone step and rewrite --dst in place"
     );
 }
 

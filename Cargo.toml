@@ -1,6 +1,6 @@
 [package]
 name = "cfx-resource-scrambler"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Rust port of fxserver-resource-scrambler: replaces FiveM resource events with random UUIDs"
 license = "GPL-3.0"

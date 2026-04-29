@@ -53,6 +53,8 @@ struct EventRegexes {
     oxlib_callback_register: Regex,
     oxlib_callback_await: Regex,
     oxlib_callback: Regex,
+    qbcore_create_callback: Regex,
+    qbcore_trigger_callback: Regex,
 }
 
 impl EventRegexes {
@@ -83,6 +85,10 @@ impl EventRegexes {
             oxlib_callback_register: build("lib.callback.register"),
             oxlib_callback_await: build("lib.callback.await"),
             oxlib_callback: build("lib.callback"),
+            // QBCore callbacks (also reached through qbx_core's compat shim).
+            // Unidirectional: Create is server-side, Trigger is client-side.
+            qbcore_create_callback: build("QBCore.Functions.CreateCallback"),
+            qbcore_trigger_callback: build("QBCore.Functions.TriggerCallback"),
         }
     }
 }
@@ -127,18 +133,21 @@ pub struct ResourceScrambler {
     old_client_events: Vec<String>,
     old_esx_callbacks: Vec<String>,
     old_oxlib_callbacks: Vec<String>,
+    old_qbcore_callbacks: Vec<String>,
 
     seen_old_server: HashSet<String>,
     seen_old_net: HashSet<String>,
     seen_old_client: HashSet<String>,
     seen_old_esx: HashSet<String>,
     seen_old_oxlib: HashSet<String>,
+    seen_old_qbcore: HashSet<String>,
 
     new_server_events: Vec<String>,
     new_net_events: Vec<String>,
     new_client_events: Vec<String>,
     new_esx_callbacks: Vec<String>,
     new_oxlib_callbacks: Vec<String>,
+    new_qbcore_callbacks: Vec<String>,
 
     server_scripts: Vec<PathBuf>,
     client_scripts: Vec<PathBuf>,
@@ -174,16 +183,19 @@ impl ResourceScrambler {
             old_client_events: Vec::new(),
             old_esx_callbacks: Vec::new(),
             old_oxlib_callbacks: Vec::new(),
+            old_qbcore_callbacks: Vec::new(),
             seen_old_server: HashSet::new(),
             seen_old_net: HashSet::new(),
             seen_old_client: HashSet::new(),
             seen_old_esx: HashSet::new(),
             seen_old_oxlib: HashSet::new(),
+            seen_old_qbcore: HashSet::new(),
             new_server_events: Vec::new(),
             new_net_events: Vec::new(),
             new_client_events: Vec::new(),
             new_esx_callbacks: Vec::new(),
             new_oxlib_callbacks: Vec::new(),
+            new_qbcore_callbacks: Vec::new(),
             server_scripts: Vec::new(),
             client_scripts: Vec::new(),
             directories: Vec::new(),
@@ -543,6 +555,13 @@ impl ResourceScrambler {
                 &mut self.seen_old_oxlib,
                 &system,
             );
+            extract_into_filtered(
+                &self.re.qbcore_create_callback,
+                &code,
+                &mut self.old_qbcore_callbacks,
+                &mut self.seen_old_qbcore,
+                &system,
+            );
         }
     }
 
@@ -605,6 +624,13 @@ impl ResourceScrambler {
                 &mut self.seen_old_oxlib,
                 &system,
             );
+            extract_into_filtered(
+                &self.re.qbcore_trigger_callback,
+                &code,
+                &mut self.old_qbcore_callbacks,
+                &mut self.seen_old_qbcore,
+                &system,
+            );
         }
     }
 
@@ -634,6 +660,8 @@ impl ResourceScrambler {
         // callback gets a single replacement — handy for the (rare) case where
         // a developer reuses the string deliberately.
         self.new_oxlib_callbacks = assign(&mut master, &self.old_oxlib_callbacks);
+        // QBCore (and qbx_core's compat shim) — same logic.
+        self.new_qbcore_callbacks = assign(&mut master, &self.old_qbcore_callbacks);
 
         for _ in 0..self.old_esx_callbacks.len() {
             self.new_esx_callbacks.push(unique_uuid(&self.new_esx_callbacks));
@@ -667,6 +695,7 @@ impl ResourceScrambler {
         let client_map = build_map(&self.old_client_events, &self.new_client_events);
         let esx_map = build_map(&self.old_esx_callbacks, &self.new_esx_callbacks);
         let oxlib_map = build_map(&self.old_oxlib_callbacks, &self.new_oxlib_callbacks);
+        let qbcore_map = build_map(&self.old_qbcore_callbacks, &self.new_qbcore_callbacks);
 
         // One precompiled regex per call site.
         let re_register_server_event = call_regex("RegisterServerEvent", true);
@@ -685,6 +714,8 @@ impl ResourceScrambler {
         let re_oxlib_cb_register     = call_regex("lib.callback.register", false);
         let re_oxlib_cb_await        = call_regex("lib.callback.await", false);
         let re_oxlib_cb              = call_regex("lib.callback", false);
+        let re_qbcore_create_cb      = call_regex("QBCore.Functions.CreateCallback", false);
+        let re_qbcore_trigger_cb     = call_regex("QBCore.Functions.TriggerCallback", false);
 
         let server_total = self.server_scripts.len();
         for (i, path) in self.server_scripts.iter().enumerate() {
@@ -700,6 +731,7 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_oxlib_cb_register,     "lib.callback.register", false, &[&oxlib_map]);
             let code = rewrite(&code, &re_oxlib_cb_await,        "lib.callback.await", false, &[&oxlib_map]);
             let code = rewrite(&code, &re_oxlib_cb,              "lib.callback", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_qbcore_create_cb,      "QBCore.Functions.CreateCallback", false, &[&qbcore_map]);
 
             atomic_write(path, &code)?;
         }
@@ -721,6 +753,7 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_oxlib_cb_register, "lib.callback.register", false, &[&oxlib_map]);
             let code = rewrite(&code, &re_oxlib_cb_await,    "lib.callback.await", false, &[&oxlib_map]);
             let code = rewrite(&code, &re_oxlib_cb,          "lib.callback", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_qbcore_trigger_cb, "QBCore.Functions.TriggerCallback", false, &[&qbcore_map]);
 
             atomic_write(path, &code)?;
         }

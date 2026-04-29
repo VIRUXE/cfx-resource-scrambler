@@ -16,6 +16,7 @@ fn main() -> ExitCode {
     let mut loader: Option<PathBuf> = None;
     let mut timings = false;
     let mut quiet = false;
+    let mut no_clone = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
             },
             "--timings" => timings = true,
             "--quiet" | "-q" => quiet = true,
+            "--no-clone" => no_clone = true,
             "-h" | "--help" => {
                 print_usage();
                 return ExitCode::SUCCESS;
@@ -61,7 +63,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    if let Err(e) = run(&src, &dst, loader.as_deref(), timings, quiet) {
+    if let Err(e) = run(&src, &dst, loader.as_deref(), timings, quiet, no_clone) {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
     }
@@ -83,7 +85,7 @@ fn print_usage() {
     );
 }
 
-fn run(src: &Path, dst: &Path, loader: Option<&Path>, timings: bool, quiet: bool) -> Result<(), String> {
+fn run(src: &Path, dst: &Path, loader: Option<&Path>, timings: bool, quiet: bool, no_clone: bool) -> Result<(), String> {
     if !src.exists() {
         return Err(format!(
             "source directory {} does not exist",
@@ -93,18 +95,30 @@ fn run(src: &Path, dst: &Path, loader: Option<&Path>, timings: bool, quiet: bool
 
     let mut step = StepTimer::new(timings);
 
-    if !quiet {
-        println!("Cloning resources");
+    if no_clone {
+        if !dst.exists() {
+            return Err(format!(
+                "--no-clone: destination {} does not exist; pre-populate it or omit --no-clone",
+                dst.display()
+            ));
+        }
+        if !quiet {
+            println!("Skipping clone (--no-clone); reusing {}", dst.display());
+        }
+    } else {
+        if !quiet {
+            println!("Cloning resources");
+        }
+        step.start("clone");
+        if dst.exists() {
+            fs::remove_dir_all(dst).map_err(|e| {
+                format!("failed to clear {}: {e}", dst.display())
+            })?;
+        }
+        copy_dir(src, dst)
+            .map_err(|e| format!("failed to clone {} → {}: {e}", src.display(), dst.display()))?;
+        step.end();
     }
-    step.start("clone");
-    if dst.exists() {
-        fs::remove_dir_all(dst).map_err(|e| {
-            format!("failed to clear {}: {e}", dst.display())
-        })?;
-    }
-    copy_dir(src, dst)
-        .map_err(|e| format!("failed to clone {} → {}: {e}", src.display(), dst.display()))?;
-    step.end();
 
     let mut scrambler = match loader {
         Some(path) => {

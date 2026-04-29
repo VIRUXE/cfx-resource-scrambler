@@ -9,6 +9,12 @@ longer trigger sensitive events by guessing names. A companion `scrambler-vac`
 resource is generated that listens for the **original** names and reports any
 client that triggers one.
 
+Both legacy `__resource.lua` and modern `fxmanifest.lua` manifests are parsed,
+and `.lua` files loaded transitively via `require` / `dofile` / `lua_load` are
+discovered and rewritten too — anything declared in `/server/`, `/client/`,
+or with `sv_` / `cl_` / `server.` / `client.` prefixes is bucketed accordingly,
+and ambiguous files are processed as both.
+
 > The best advice in general is to never trust the client and make appropriate
 > changes to your resources.
 
@@ -42,7 +48,10 @@ scrambled output. Node 10 + patched upstream vs. release Rust binary:
 | 75 resources, 50 events   |   306 | 1.8 MiB|       3 min 57 s|  131 ms    |       ~1 800 × |
 | 200 resources, 80 events  |   806 | 7.6 MiB|     54 min 58 s |  492 ms    |       ~6 700 × |
 
-A typical FXserver deployment lands well below the largest row.
+A typical FXserver deployment lands well below the largest row. As a
+real-world data point: a 754-resource production tree with 3 823 `.lua` files
+(35 GB, mixed `__resource.lua` and `fxmanifest.lua`, QBCore-derived stack)
+scrambles end-to-end in **~5.7 s**.
 
 ## Install
 
@@ -86,19 +95,23 @@ cargo build --release --target x86_64-pc-windows-gnu
    resource directory and add `start scrambler-vac` to your `server.cfg`.
 
 ```
-resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet]
+resource-scrambler <resources-dir> [--dst <dir>] [--loader <path>] [--timings] [--quiet] [--no-clone]
 
   <resources-dir>  directory containing the resources to scramble (required)
   --dst <dir>      output directory                        (default ./scrambled_resources)
   --loader <path>  override the embedded Lua manifest sandbox
   --timings        print per-step durations to stderr
   --quiet, -q      suppress per-script progress output
+  --no-clone       skip the clone step and rewrite an already-populated --dst
+                   in place (use after `cp -al <src> <dst>` for fast iteration
+                   on large trees; writes are atomic, so hardlinks are safe)
 ```
 
-The `__resource.lua` manifest sandbox (`loader.lua` at the repo root) is
-compiled into the binary, so a normal install needs nothing besides the
-executable. The `--loader` flag is for advanced users who want a customised
-sandbox — e.g. recognising additional manifest directives.
+The manifest sandbox (`loader.lua` at the repo root) is compiled into the
+binary, so a normal install needs nothing besides the executable. It uses a
+`_G` metatable to silently no-op every directive that isn't `*_script(s)`, so
+new fxmanifest features don't need an allow-list update. The `--loader` flag
+is for advanced users who want a customised sandbox.
 
 ## Output
 

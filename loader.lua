@@ -3,61 +3,33 @@ __SCRIPTS = {
   client = {},
 }
 
-local dummies = {
-  'resource_manifest_version',
-  'dependency',
-  'dependencies',
-  'ui_page',
-  'file',
-  'description',
-  'version',
-  'export',
-  'server_export',
-  'server_only',
-  'resource_type',
-  'map',
-  'SetResourceInfo',
-  'loadscreen',
-  'data_file',
-  'this_is_a_map',
-  'object_file',
-  'supersede_radio'
-}
+-- A no-op that can be called with any number of args and chained
+-- (`foo 'bar' 'baz'` is two calls in Lua's call-without-parens form).
+function dummy(...) return dummy end
 
-function dummy() return dummy end
-
-server_script = function(data)
-
+local function append_string_or_table(list, data)
   if type(data) == 'table' then
-
-    for i=1, #data, 1 do
-      table.insert(__SCRIPTS.server, data[i])
+    for i = 1, #data, 1 do
+      table.insert(list, data[i])
     end
-
   else
-    table.insert(__SCRIPTS.server, data)
+    table.insert(list, data)
   end
-
 end
 
-client_script = function(data)
-
-  if type(data) == 'table' then
-
-    for i=1, #data, 1 do
-      table.insert(__SCRIPTS.client, data[i])
-    end
-
-  else
-    table.insert(__SCRIPTS.client, data)
-  end
-
+server_script = function(data) append_string_or_table(__SCRIPTS.server, data) end
+client_script = function(data) append_string_or_table(__SCRIPTS.client, data) end
+shared_script = function(data)
+  append_string_or_table(__SCRIPTS.server, data)
+  append_string_or_table(__SCRIPTS.client, data)
 end
 
 server_scripts = server_script
 client_scripts = client_script
+shared_scripts = shared_script
 
-for i=1, #dummies, 1 do
-  _G[dummies[i]]        = dummy
-  _G[dummies[i] .. 's'] = dummy
-end
+-- Any other manifest directive (description, version, name, dependency,
+-- author, fx_version, ui_page, file, …) silently becomes a no-op. This is
+-- much more robust than maintaining a hand-rolled allow-list as new fxmanifest
+-- features ship.
+setmetatable(_G, { __index = function(_, _) return dummy end })

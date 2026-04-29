@@ -179,7 +179,13 @@ impl ResourceScrambler {
         let mut resource_files: Vec<PathBuf> = WalkDir::new(&directory)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() && e.file_name() == "__resource.lua")
+            .filter(|e| {
+                if !e.file_type().is_file() {
+                    return false;
+                }
+                let name = e.file_name();
+                name == "__resource.lua" || name == "fxmanifest.lua"
+            })
             .map(|e| e.path().to_path_buf())
             .collect();
 

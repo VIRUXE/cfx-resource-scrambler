@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mlua::{Lua, Table};
-use regex::Regex;
+use regex::bytes::Regex;
 use serde::Serialize;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -263,7 +263,76 @@ impl ResourceScrambler {
             self.resolve_scripts(&directory_of_resource, &client_scripts, false);
         }
 
+        // Manifests only declare the *entry-point* scripts; helpers loaded via
+        // `require` / `dofile` / `lua_load` aren't listed but still call event
+        // APIs and need rewriting too. Walk every `.lua` file in each resource
+        // and add the ones we missed, bucketed by path heuristic.
+        self.discover_undeclared_scripts();
+
         Ok(())
+    }
+
+    fn discover_undeclared_scripts(&mut self) {
+        // Snapshot the declared scripts so we can de-dup against them quickly.
+        let declared_server: HashSet<PathBuf> = self.server_scripts.iter().cloned().collect();
+        let declared_client: HashSet<PathBuf> = self.client_scripts.iter().cloned().collect();
+        let resource_dirs: Vec<PathBuf> = self.directories.clone();
+
+        for resource_dir in &resource_dirs {
+            for entry in WalkDir::new(resource_dir).into_iter().filter_map(|e| e.ok()) {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("lua") {
+                    continue;
+                }
+                let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                // Skip manifests themselves.
+                if fname == "fxmanifest.lua" || fname == "__resource.lua" {
+                    continue;
+                }
+                let path_buf = path.to_path_buf();
+                let already_server = declared_server.contains(&path_buf);
+                let already_client = declared_client.contains(&path_buf);
+                if already_server && already_client {
+                    continue;
+                }
+
+                // Heuristic: bucket undeclared files by path component.
+                // Path is canonical Unix-style here (we built dst ourselves).
+                let path_str = path.to_string_lossy();
+                let in_server_dir = path_str.contains("/server/")
+                    || path_str.contains("/sv-")
+                    || path_str.contains("/sv_")
+                    || fname.starts_with("sv_")
+                    || fname.starts_with("sv-")
+                    || fname.starts_with("server.");
+                let in_client_dir = path_str.contains("/client/")
+                    || path_str.contains("/cl-")
+                    || path_str.contains("/cl_")
+                    || fname.starts_with("cl_")
+                    || fname.starts_with("cl-")
+                    || fname.starts_with("client.");
+
+                let (add_server, add_client) = match (in_server_dir, in_client_dir) {
+                    (true, false) => (true, false),
+                    (false, true) => (false, true),
+                    // /shared/, /sh-/, ambiguous, or no hint at all → process
+                    // as both. Same-bucket no-op rewrites are cheap and the
+                    // first-bucket-wins ordering keeps cross-bucket collisions
+                    // consistent.
+                    _ => (true, true),
+                };
+
+                if add_server && !already_server {
+                    self.server_scripts.push(path_buf.clone());
+                }
+                if add_client && !already_client {
+                    self.client_scripts.push(path_buf);
+                }
+            }
+        }
     }
 
     fn resolve_scripts(
@@ -334,7 +403,7 @@ impl ResourceScrambler {
             if !Self::is_system_path(path) {
                 continue;
             }
-            let Ok(code) = fs::read_to_string(path) else { continue };
+            let Ok(code) = fs::read(path) else { continue };
 
             extract_into(&self.re.register_server_event, &code, &mut self.system_server_events, &mut self.seen_system_server);
             extract_into(&self.re.add_event_handler, &code, &mut self.system_server_events, &mut self.seen_system_server);
@@ -348,7 +417,7 @@ impl ResourceScrambler {
             if !Self::is_system_path(path) {
                 continue;
             }
-            let Ok(code) = fs::read_to_string(path) else { continue };
+            let Ok(code) = fs::read(path) else { continue };
 
             extract_into(&self.re.register_net_event, &code, &mut self.system_net_events, &mut self.seen_system_net);
             extract_into(&self.re.add_event_handler, &code, &mut self.system_client_events, &mut self.seen_system_client);
@@ -364,7 +433,7 @@ impl ResourceScrambler {
             if Self::is_system_path(path) {
                 continue;
             }
-            let Ok(code) = fs::read_to_string(path) else { continue };
+            let Ok(code) = fs::read(path) else { continue };
 
             extract_into_filtered(
                 &self.re.register_server_event,
@@ -405,7 +474,7 @@ impl ResourceScrambler {
             if Self::is_system_path(path) {
                 continue;
             }
-            let Ok(code) = fs::read_to_string(path) else { continue };
+            let Ok(code) = fs::read(path) else { continue };
 
             extract_into_filtered(
                 &self.re.register_net_event,
@@ -489,7 +558,7 @@ impl ResourceScrambler {
         let server_total = self.server_scripts.len();
         for (i, path) in self.server_scripts.iter().enumerate() {
             progress("server", path, i + 1, server_total);
-            let code = fs::read_to_string(path)?;
+            let code = fs::read(path)?;
 
             let code = rewrite(&code, &re_register_server_event, "RegisterServerEvent", true,  &[&server_map]);
             let code = rewrite(&code, &re_add_event_handler,     "AddEventHandler",     false, &[&server_map]);
@@ -497,13 +566,13 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_trigger_client_event,  "TriggerClientEvent",  false, &[&net_map]);
             let code = rewrite(&code, &re_esx_register_cb,       "ESX.RegisterServerCallback", false, &[&esx_map]);
 
-            fs::write(path, code)?;
+            atomic_write(path, &code)?;
         }
 
         let client_total = self.client_scripts.len();
         for (i, path) in self.client_scripts.iter().enumerate() {
             progress("client", path, i + 1, client_total);
-            let code = fs::read_to_string(path)?;
+            let code = fs::read(path)?;
 
             let code = rewrite(&code, &re_trigger_server_event, "TriggerServerEvent", false, &[&server_map]);
             let code = rewrite(&code, &re_register_net_event,   "RegisterNetEvent",   true,  &[&net_map]);
@@ -515,7 +584,7 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_trigger_event,     "TriggerEvent",    false, &[&net_map, &client_map]);
             let code = rewrite(&code, &re_esx_trigger_cb,    "ESX.TriggerServerCallback", false, &[&esx_map]);
 
-            fs::write(path, code)?;
+            atomic_write(path, &code)?;
         }
 
         Ok(())
@@ -661,10 +730,10 @@ fn lua_array_to_strings(t: Table) -> Vec<String> {
     pairs.into_iter().map(|(_, v)| v).collect()
 }
 
-fn extract_into(re: &Regex, code: &str, dest: &mut Vec<String>, seen: &mut HashSet<String>) {
+fn extract_into(re: &Regex, code: &[u8], dest: &mut Vec<String>, seen: &mut HashSet<String>) {
     for cap in re.captures_iter(code) {
         if let Some(m) = cap.get(1) {
-            let name = m.as_str();
+            let Ok(name) = std::str::from_utf8(m.as_bytes()) else { continue };
             if !seen.contains(name) {
                 seen.insert(name.to_owned());
                 dest.push(name.to_owned());
@@ -675,14 +744,14 @@ fn extract_into(re: &Regex, code: &str, dest: &mut Vec<String>, seen: &mut HashS
 
 fn extract_into_filtered(
     re: &Regex,
-    code: &str,
+    code: &[u8],
     dest: &mut Vec<String>,
     seen: &mut HashSet<String>,
     block: &HashSet<&str>,
 ) {
     for cap in re.captures_iter(code) {
         if let Some(m) = cap.get(1) {
-            let name = m.as_str();
+            let Ok(name) = std::str::from_utf8(m.as_bytes()) else { continue };
             if block.contains(name) || seen.contains(name) {
                 continue;
             }
@@ -699,6 +768,19 @@ fn unique_uuid(_existing: &[String]) -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Write atomically: create a sibling tempfile and rename it over the target.
+/// This makes writes crash-safe and — important for `cp -al` snapshot workflows
+/// — prevents the new content from leaking back through hardlinks to the
+/// source tree, since we never truncate the original inode.
+fn atomic_write(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp_name = path.file_name().unwrap_or_default().to_owned();
+    tmp_name.push(".scrambler-tmp");
+    let tmp = parent.join(tmp_name);
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path)
+}
+
 /// Build a name → replacement map. `old` and `new` come in lock-step from
 /// the parallel vectors that the rest of the scrambler maintains.
 fn build_map(old: &[String], new: &[String]) -> HashMap<String, String> {
@@ -711,39 +793,44 @@ fn build_map(old: &[String], new: &[String]) -> HashMap<String, String> {
     m
 }
 
-/// Compiled regex for a single call site like `Func("name")`. With
-/// `closing_paren` the regex also matches the trailing `)`.
-fn call_regex(func: &str, closing_paren: bool) -> Regex {
-    let suffix = if closing_paren { r"\)" } else { "" };
+/// Compiled regex for the head of a call site: `Func("name"`. We deliberately
+/// stop at the closing quote rather than the closing paren — this catches the
+/// `RegisterServerEvent('name', callback)` and `AddEventHandler('name',
+/// function() … end)` forms where the next character after the quoted name is
+/// a comma instead of `)`. The `closing_paren` argument is ignored and kept
+/// only for call-site signature stability.
+fn call_regex(func: &str, _closing_paren: bool) -> Regex {
     let pat = format!(
-        r#"{func}\(["']([^"']*)["']{suffix}"#,
+        r#"{func}\(\s*["']([^"']*)["']"#,
         func = regex::escape(func),
     );
     Regex::new(&pat).expect("valid regex")
 }
 
-/// Single pass: for every `func("name")` call site in `code`, look `name` up
-/// in `lookups` (in order; first hit wins) and substitute the new name. Calls
-/// whose name is in *none* of the lookups are left untouched.
+/// Single pass: for every `func("name"…` call site in `code`, look `name` up
+/// in `lookups` (in order; first hit wins) and substitute the new name. The
+/// match only covers up through the closing quote, so anything that follows
+/// (`)`, `,`, whitespace, an inline callback, …) is preserved verbatim. Works
+/// on raw bytes so non-UTF-8 Lua files (e.g. files with latin-1 string
+/// literals) are preserved byte-for-byte outside the matched span.
 fn rewrite(
-    code: &str,
+    code: &[u8],
     re: &Regex,
     func: &str,
-    closing_paren: bool,
+    _closing_paren: bool,
     lookups: &[&HashMap<String, String>],
-) -> String {
-    re.replace_all(code, |caps: &regex::Captures| {
-        let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+) -> Vec<u8> {
+    re.replace_all(code, |caps: &regex::bytes::Captures| -> Vec<u8> {
+        let name_bytes = caps.get(1).map(|m| m.as_bytes()).unwrap_or(b"");
+        let name = match std::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            // Non-UTF-8 event name — never in our maps; leave the call alone.
+            Err(_) => return caps.get(0).unwrap().as_bytes().to_owned(),
+        };
         let new_name = lookups.iter().find_map(|m| m.get(name).map(String::as_str));
         match new_name {
-            Some(n) => {
-                if closing_paren {
-                    format!("{func}('{n}')")
-                } else {
-                    format!("{func}('{n}'")
-                }
-            }
-            None => caps.get(0).unwrap().as_str().to_owned(),
+            Some(n) => format!("{func}('{n}'").into_bytes(),
+            None => caps.get(0).unwrap().as_bytes().to_owned(),
         }
     })
     .into_owned()

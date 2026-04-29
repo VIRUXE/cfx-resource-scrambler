@@ -36,6 +36,7 @@ const SYSTEM_RESOURCES: &[&str] = &[
     "keks",
     // Vendor
     "mysql-async",
+    "ox_lib",
 ];
 
 /// Regexes that mirror those in the JS source. Each regex has several alternates
@@ -49,6 +50,9 @@ struct EventRegexes {
     register_net_event: Regex,
     esx_register_server_callback: Regex,
     esx_trigger_server_callback: Regex,
+    oxlib_callback_register: Regex,
+    oxlib_callback_await: Regex,
+    oxlib_callback: Regex,
 }
 
 impl EventRegexes {
@@ -72,6 +76,13 @@ impl EventRegexes {
             register_net_event: build("RegisterNetEvent"),
             esx_register_server_callback: build("ESX.RegisterServerCallback"),
             esx_trigger_server_callback: build("ESX.TriggerServerCallback"),
+            // The plain `lib.callback(` form is disjoint from `.register` and
+            // `.await` because the regex demands `\(` immediately after
+            // `lib.callback`, not a `.` — so it never accidentally matches the
+            // longer-prefixed forms.
+            oxlib_callback_register: build("lib.callback.register"),
+            oxlib_callback_await: build("lib.callback.await"),
+            oxlib_callback: build("lib.callback"),
         }
     }
 }
@@ -108,20 +119,26 @@ pub struct ResourceScrambler {
     seen_system_net: HashSet<String>,
     seen_system_client: HashSet<String>,
 
+    system_oxlib_callbacks: Vec<String>,
+    seen_system_oxlib: HashSet<String>,
+
     old_server_events: Vec<String>,
     old_net_events: Vec<String>,
     old_client_events: Vec<String>,
     old_esx_callbacks: Vec<String>,
+    old_oxlib_callbacks: Vec<String>,
 
     seen_old_server: HashSet<String>,
     seen_old_net: HashSet<String>,
     seen_old_client: HashSet<String>,
     seen_old_esx: HashSet<String>,
+    seen_old_oxlib: HashSet<String>,
 
     new_server_events: Vec<String>,
     new_net_events: Vec<String>,
     new_client_events: Vec<String>,
     new_esx_callbacks: Vec<String>,
+    new_oxlib_callbacks: Vec<String>,
 
     server_scripts: Vec<PathBuf>,
     client_scripts: Vec<PathBuf>,
@@ -150,18 +167,23 @@ impl ResourceScrambler {
             seen_system_server,
             seen_system_net: HashSet::new(),
             seen_system_client: HashSet::new(),
+            system_oxlib_callbacks: Vec::new(),
+            seen_system_oxlib: HashSet::new(),
             old_server_events: Vec::new(),
             old_net_events: Vec::new(),
             old_client_events: Vec::new(),
             old_esx_callbacks: Vec::new(),
+            old_oxlib_callbacks: Vec::new(),
             seen_old_server: HashSet::new(),
             seen_old_net: HashSet::new(),
             seen_old_client: HashSet::new(),
             seen_old_esx: HashSet::new(),
+            seen_old_oxlib: HashSet::new(),
             new_server_events: Vec::new(),
             new_net_events: Vec::new(),
             new_client_events: Vec::new(),
             new_esx_callbacks: Vec::new(),
+            new_oxlib_callbacks: Vec::new(),
             server_scripts: Vec::new(),
             client_scripts: Vec::new(),
             directories: Vec::new(),
@@ -393,6 +415,7 @@ impl ResourceScrambler {
         self.system_server_events.iter()
             .chain(self.system_net_events.iter())
             .chain(self.system_client_events.iter())
+            .chain(self.system_oxlib_callbacks.iter())
             .cloned()
             .collect()
     }
@@ -420,6 +443,13 @@ impl ResourceScrambler {
             // those names so they're treated as system events and not
             // scrambled away.
             extract_into(&self.re.register_net_event, &code, &mut self.system_net_events, &mut self.seen_system_net);
+            // ox_lib callbacks live in their own registry — gather any names
+            // ox_lib itself registers/queries so user code can't claim them.
+            // All three forms work bidirectionally (register/await/plain can
+            // each be called from either side).
+            extract_into(&self.re.oxlib_callback_register, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
+            extract_into(&self.re.oxlib_callback_await, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
+            extract_into(&self.re.oxlib_callback, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
         }
     }
 
@@ -434,6 +464,9 @@ impl ResourceScrambler {
             extract_into(&self.re.register_net_event, &code, &mut self.system_net_events, &mut self.seen_system_net);
             extract_into(&self.re.add_event_handler, &code, &mut self.system_client_events, &mut self.seen_system_client);
             extract_into(&self.re.trigger_event, &code, &mut self.system_client_events, &mut self.seen_system_client);
+            extract_into(&self.re.oxlib_callback_register, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
+            extract_into(&self.re.oxlib_callback_await, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
+            extract_into(&self.re.oxlib_callback, &code, &mut self.system_oxlib_callbacks, &mut self.seen_system_oxlib);
         }
     }
 
@@ -487,6 +520,29 @@ impl ResourceScrambler {
                 &mut self.seen_old_esx,
                 &system,
             );
+            // ox_lib callback APIs are bidirectional — all three forms
+            // (register/await/plain) can show up on either side.
+            extract_into_filtered(
+                &self.re.oxlib_callback_register,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
+            extract_into_filtered(
+                &self.re.oxlib_callback_await,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
+            extract_into_filtered(
+                &self.re.oxlib_callback,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
         }
     }
 
@@ -528,6 +584,27 @@ impl ResourceScrambler {
                 &mut self.seen_old_esx,
                 &system,
             );
+            extract_into_filtered(
+                &self.re.oxlib_callback_register,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
+            extract_into_filtered(
+                &self.re.oxlib_callback_await,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
+            extract_into_filtered(
+                &self.re.oxlib_callback,
+                &code,
+                &mut self.old_oxlib_callbacks,
+                &mut self.seen_old_oxlib,
+                &system,
+            );
         }
     }
 
@@ -552,6 +629,11 @@ impl ResourceScrambler {
         self.new_server_events = assign(&mut master, &self.old_server_events);
         self.new_net_events = assign(&mut master, &self.old_net_events);
         self.new_client_events = assign(&mut master, &self.old_client_events);
+        // ox_lib callback names live in their own registry, but folding them
+        // into the same master means a name reused as both an event and a
+        // callback gets a single replacement — handy for the (rare) case where
+        // a developer reuses the string deliberately.
+        self.new_oxlib_callbacks = assign(&mut master, &self.old_oxlib_callbacks);
 
         for _ in 0..self.old_esx_callbacks.len() {
             self.new_esx_callbacks.push(unique_uuid(&self.new_esx_callbacks));
@@ -571,6 +653,10 @@ impl ResourceScrambler {
             self.old_client_events.push(s.clone());
             self.new_client_events.push(s.clone());
         }
+        for s in &self.system_oxlib_callbacks {
+            self.old_oxlib_callbacks.push(s.clone());
+            self.new_oxlib_callbacks.push(s.clone());
+        }
     }
 
     pub fn write_scripts(&self, mut progress: impl FnMut(&str, &Path, usize, usize)) -> std::io::Result<()> {
@@ -580,6 +666,7 @@ impl ResourceScrambler {
         let net_map = build_map(&self.old_net_events, &self.new_net_events);
         let client_map = build_map(&self.old_client_events, &self.new_client_events);
         let esx_map = build_map(&self.old_esx_callbacks, &self.new_esx_callbacks);
+        let oxlib_map = build_map(&self.old_oxlib_callbacks, &self.new_oxlib_callbacks);
 
         // One precompiled regex per call site.
         let re_register_server_event = call_regex("RegisterServerEvent", true);
@@ -590,6 +677,14 @@ impl ResourceScrambler {
         let re_register_net_event    = call_regex("RegisterNetEvent", true);
         let re_esx_register_cb       = call_regex("ESX.RegisterServerCallback", false);
         let re_esx_trigger_cb        = call_regex("ESX.TriggerServerCallback", false);
+        // ox_lib callback APIs. The plain `lib.callback(` form must be
+        // rewritten *after* `.register` and `.await` so the regex never
+        // matches the longer-prefixed forms by accident — they're already
+        // disjoint at the regex level (the `.` after `lib.callback` keeps
+        // them apart), but writing in this order is also defensive.
+        let re_oxlib_cb_register     = call_regex("lib.callback.register", false);
+        let re_oxlib_cb_await        = call_regex("lib.callback.await", false);
+        let re_oxlib_cb              = call_regex("lib.callback", false);
 
         let server_total = self.server_scripts.len();
         for (i, path) in self.server_scripts.iter().enumerate() {
@@ -602,6 +697,9 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_trigger_event,         "TriggerEvent",        false, &[&server_map, &net_map]);
             let code = rewrite(&code, &re_trigger_client_event,  "TriggerClientEvent",  false, &[&net_map]);
             let code = rewrite(&code, &re_esx_register_cb,       "ESX.RegisterServerCallback", false, &[&esx_map]);
+            let code = rewrite(&code, &re_oxlib_cb_register,     "lib.callback.register", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_oxlib_cb_await,        "lib.callback.await", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_oxlib_cb,              "lib.callback", false, &[&oxlib_map]);
 
             atomic_write(path, &code)?;
         }
@@ -620,6 +718,9 @@ impl ResourceScrambler {
             let code = rewrite(&code, &re_add_event_handler, "AddEventHandler", false, &[&net_map, &client_map]);
             let code = rewrite(&code, &re_trigger_event,     "TriggerEvent",    false, &[&net_map, &client_map]);
             let code = rewrite(&code, &re_esx_trigger_cb,    "ESX.TriggerServerCallback", false, &[&esx_map]);
+            let code = rewrite(&code, &re_oxlib_cb_register, "lib.callback.register", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_oxlib_cb_await,    "lib.callback.await", false, &[&oxlib_map]);
+            let code = rewrite(&code, &re_oxlib_cb,          "lib.callback", false, &[&oxlib_map]);
 
             atomic_write(path, &code)?;
         }

@@ -389,6 +389,14 @@ impl ResourceScrambler {
         }
     }
 
+    fn all_system_events(&self) -> HashSet<String> {
+        self.system_server_events.iter()
+            .chain(self.system_net_events.iter())
+            .chain(self.system_client_events.iter())
+            .cloned()
+            .collect()
+    }
+
     fn is_system_path(path: &Path) -> bool {
         let s = path.to_string_lossy();
         SYSTEM_RESOURCES
@@ -408,6 +416,10 @@ impl ResourceScrambler {
             extract_into(&self.re.register_server_event, &code, &mut self.system_server_events, &mut self.seen_system_server);
             extract_into(&self.re.add_event_handler, &code, &mut self.system_server_events, &mut self.seen_system_server);
             extract_into(&self.re.trigger_event, &code, &mut self.system_server_events, &mut self.seen_system_server);
+            // RegisterNetEvent is legitimately used server-side too — register
+            // those names so they're treated as system events and not
+            // scrambled away.
+            extract_into(&self.re.register_net_event, &code, &mut self.system_net_events, &mut self.seen_system_net);
         }
     }
 
@@ -427,7 +439,9 @@ impl ResourceScrambler {
 
     pub fn load_custom_server_events(&mut self) {
         let scripts = self.server_scripts.clone();
-        let system: HashSet<&str> = self.system_server_events.iter().map(String::as_str).collect();
+        // Filter against the union of all system events. A name marked system
+        // anywhere shouldn't be scrambled.
+        let system: HashSet<String> = self.all_system_events();
 
         for path in &scripts {
             if Self::is_system_path(path) {
@@ -456,6 +470,16 @@ impl ResourceScrambler {
                 &mut self.seen_old_server,
                 &system,
             );
+            // RegisterNetEvent on the server side is real-world FXserver
+            // code — capture it into the net bucket so it gets rewritten by
+            // the server-script loop too.
+            extract_into_filtered(
+                &self.re.register_net_event,
+                &code,
+                &mut self.old_net_events,
+                &mut self.seen_old_net,
+                &system,
+            );
             extract_into_filtered(
                 &self.re.esx_register_server_callback,
                 &code,
@@ -468,7 +492,7 @@ impl ResourceScrambler {
 
     pub fn load_custom_client_events(&mut self) {
         let scripts = self.client_scripts.clone();
-        let system: HashSet<&str> = self.system_client_events.iter().map(String::as_str).collect();
+        let system: HashSet<String> = self.all_system_events();
 
         for path in &scripts {
             if Self::is_system_path(path) {
@@ -508,15 +532,27 @@ impl ResourceScrambler {
     }
 
     pub fn generate_random_matching_events(&mut self) {
-        for _ in 0..self.old_server_events.len() {
-            self.new_server_events.push(unique_uuid(&self.new_server_events));
-        }
-        for _ in 0..self.old_net_events.len() {
-            self.new_net_events.push(unique_uuid(&self.new_net_events));
-        }
-        for _ in 0..self.old_client_events.len() {
-            self.new_client_events.push(unique_uuid(&self.new_client_events));
-        }
+        // A single name can show up in multiple buckets (e.g. `RegisterServerEvent('foo')`
+        // server-side and `RegisterNetEvent('foo')` somewhere else). Give the
+        // same name the same UUID across buckets so cross-context calls stay
+        // consistent after rewriting.
+        let mut master: HashMap<String, String> = HashMap::new();
+        let assign = |master: &mut HashMap<String, String>, names: &[String]| -> Vec<String> {
+            names
+                .iter()
+                .map(|n| {
+                    master
+                        .entry(n.clone())
+                        .or_insert_with(|| Uuid::new_v4().to_string())
+                        .clone()
+                })
+                .collect()
+        };
+
+        self.new_server_events = assign(&mut master, &self.old_server_events);
+        self.new_net_events = assign(&mut master, &self.old_net_events);
+        self.new_client_events = assign(&mut master, &self.old_client_events);
+
         for _ in 0..self.old_esx_callbacks.len() {
             self.new_esx_callbacks.push(unique_uuid(&self.new_esx_callbacks));
         }
@@ -561,8 +597,9 @@ impl ResourceScrambler {
             let code = fs::read(path)?;
 
             let code = rewrite(&code, &re_register_server_event, "RegisterServerEvent", true,  &[&server_map]);
-            let code = rewrite(&code, &re_add_event_handler,     "AddEventHandler",     false, &[&server_map]);
-            let code = rewrite(&code, &re_trigger_event,         "TriggerEvent",        false, &[&server_map]);
+            let code = rewrite(&code, &re_register_net_event,    "RegisterNetEvent",    true,  &[&net_map]);
+            let code = rewrite(&code, &re_add_event_handler,     "AddEventHandler",     false, &[&server_map, &net_map]);
+            let code = rewrite(&code, &re_trigger_event,         "TriggerEvent",        false, &[&server_map, &net_map]);
             let code = rewrite(&code, &re_trigger_client_event,  "TriggerClientEvent",  false, &[&net_map]);
             let code = rewrite(&code, &re_esx_register_cb,       "ESX.RegisterServerCallback", false, &[&esx_map]);
 
@@ -747,7 +784,7 @@ fn extract_into_filtered(
     code: &[u8],
     dest: &mut Vec<String>,
     seen: &mut HashSet<String>,
-    block: &HashSet<&str>,
+    block: &HashSet<String>,
 ) {
     for cap in re.captures_iter(code) {
         if let Some(m) = cap.get(1) {
